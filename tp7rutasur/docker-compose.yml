@@ -1,0 +1,74 @@
+services:
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+    healthcheck:
+      test: ["CMD-SHELL", "./opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      retries: 15
+      start_period: 25s
+  mongo:
+    image: mongo:7
+    command: ["mongod","--replSet","rs0","--bind_ip_all"]
+    volumes: ["mongo_data:/data/db"]
+    healthcheck:
+      test: ["CMD-SHELL","mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null"]
+      interval: 5s
+      retries: 20
+  mongo-init:
+    image: mongo:7
+    depends_on: {mongo: {condition: service_healthy}}
+    entrypoint: ["/bin/sh","-c"]
+    command: ["mongosh mongodb://mongo:27017/admin --quiet --eval 'try { rs.status() } catch(e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongo:27017\"}]}) }' && sleep 4"]
+    restart: "no"
+  topics:
+    build: .
+    environment: {KAFKA_BROKERS: kafka:9092}
+    command: ["node","src/topics.js"]
+    depends_on: {kafka: {condition: service_healthy}}
+    restart: "no"
+  simulator:
+    build: .
+    environment: {KAFKA_BROKERS: kafka:9092, SIM_SEED: 12345, SIM_INTERVAL_MS: 3000, SIM_FACTOR: 120, DEMO_TOKEN: cambiar-este-token-local}
+    command: ["node","src/simulator.js"]
+    depends_on: {topics: {condition: service_completed_successfully}}
+  proyector:
+    build: .
+    environment: {ROLE: proyector, KAFKA_BROKERS: kafka:9092, MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0'}
+    depends_on: {topics: {condition: service_completed_successfully}, mongo-init: {condition: service_completed_successfully}}
+  notificaciones:
+    build: .
+    environment: {ROLE: notificaciones, KAFKA_BROKERS: kafka:9092, MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0'}
+    depends_on: {topics: {condition: service_completed_successfully}, mongo-init: {condition: service_completed_successfully}}
+  reprogramacion:
+    build: .
+    environment: {ROLE: reprogramacion, KAFKA_BROKERS: kafka:9092, MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0'}
+    depends_on: {topics: {condition: service_completed_successfully}, mongo-init: {condition: service_completed_successfully}}
+  monitor-sla:
+    build: .
+    environment: {ROLE: monitor-sla, KAFKA_BROKERS: kafka:9092, MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0', SIM_FACTOR: 120}
+    depends_on: {topics: {condition: service_completed_successfully}, mongo-init: {condition: service_completed_successfully}}
+  analitica:
+    build: .
+    environment: {ROLE: analitica, KAFKA_BROKERS: kafka:9092, MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0'}
+    depends_on: {topics: {condition: service_completed_successfully}, mongo-init: {condition: service_completed_successfully}}
+  web:
+    build: ./web
+    environment: {MONGO_URI: 'mongodb://mongo:27017/rutasur?replicaSet=rs0', SIMULATOR_URL: 'http://simulator:3001', DEMO_TOKEN: cambiar-este-token-local}
+    ports: ['3000:3000']
+    depends_on: {mongo-init: {condition: service_completed_successfully}, simulator: {condition: service_started}}
+volumes:
+  mongo_data:

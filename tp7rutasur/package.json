@@ -1,0 +1,5 @@
+{
+  "name":"rutasur-tp7","version":"1.0.0","private":true,"type":"module",
+  "scripts":{"start":"node src/service.js","simulate":"node src/simulator.js","replay":"node src/replay.js"},
+  "dependencies":{"kafkajs":"^2.2.4","mongodb":"^6.14.0","zod":"^3.24.2"}
+}
